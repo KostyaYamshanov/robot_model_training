@@ -129,14 +129,14 @@ class QuadcopterModel(nn.Module):
         roll_curr, pitch_curr, yaw_curr = state[:, 3:4], state[:, 4:5], state[:, 5:6]  # shape [batch, 1]
         velocities_curr = state[:, 6:]  # shape [batch, 6] (V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed)
 
-        print("Shape of state:", state.shape)  # Должно быть [batch, 12]
-        print("Shape of velocities_curr:", velocities_curr.shape)  # Должно быть [batch, 6]
-        print("Shape of control:", control.shape)  # Должно быть [batch, 4]
-        print("Shape of dt:", dt.shape)  # Должно быть [batch, 1]
+        # print("Shape of state:", state.shape)  # Должно быть [batch, 12]
+        #print("Shape of velocities_curr:", velocities_curr.shape)  # Должно быть [batch, 6]
+        #print("Shape of control:", control.shape)  # Должно быть [batch, 4]
+        #print("Shape of dt:", dt.shape)  # Должно быть [batch, 1]
 
         # Prepare input for the model: [state velocities, control, dt]
         inp = torch.cat([velocities_curr, control, dt], dim=1)  # shape [batch, 11]
-        print("Shape of inp:", inp.shape)  # Должно быть [batch, 11]
+        # print("Shape of inp:", inp.shape)  # Должно быть [batch, 11]
         # Predict new velocities
         if gt_velocities is None:
             predicted_velocities = self(inp)  # shape [batch, 6]

@@ -29,22 +29,7 @@ class Trainer:
         batch_size: int, rollout_size: int,
         main_metric: str, device: str, use_wandb: bool, 
         plot_trajectories: bool, save_to_csv=False
-        ):
-        """
-        Function for training a neural network model
-
-        Args:
-            :model: (torch.nn.Module) Robot model 
-            :train_data: (list) list of train RobotDatasets
-            :val_data: (list) list of validation RobotDatasets
-            :epochs_num: (int) number of epochs
-            :batch_size: (int) batch size
-            :rollout_size: (int) rollout length (number of samples) used in predict_multi_step
-            :main_metric: (str) the name of the key metric by which the best model is selected
-            :device: (str) placement device cuda / cpu
-            :use_wandb: (bool) flag that wandb logging is used
-        """
-
+    ):
         best_main_metric = None  
         best_state_dict = None  
         rollout_size_max = rollout_size
@@ -54,13 +39,11 @@ class Trainer:
         } 
 
         optimizer = model.get_optimizer()
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=25)
-
         loss_fn = model.get_loss_fn() 
-        bar = tqdm(range(epochs_num))      # progress bar
+        bar = tqdm(range(epochs_num))
         for epoch in bar:
             train_loss = 0
-            val_loss  = 0
+            val_loss = 0
             model.train()
             rollout_size = int(min((2 * epoch) / epochs_num, 1.0) * rollout_size_max)
             rollout_size = 2 if rollout_size < 2 else rollout_size
@@ -74,29 +57,27 @@ class Trainer:
 
                 predicted_traj = self.predict_multi_step(
                     model,
-                    batch_x[:, 0, :],     # [batch_size, robot_state]
-                    batch_u[:, 0:-1, :],  # [batch_size, rollout_size-1, control]
+                    batch_x[:, 0, :],     # [batch_size, 12]
+                    batch_u[:, 0:-1, :],  # [batch_size, rollout_size-1, 4]
                     batch_dt,             # [batch_size, rollout_size-1, 1] 
                     rollout_size
                 )
                 loss = loss_fn(predicted_traj, batch_x)
 
-                # Do backpropagation
                 loss.backward()
                 optimizer.step()
-                # scheduler.step()
                 optimizer.zero_grad()
                 train_loss += loss.cpu().detach().numpy() / N_iters
             
-            # switch model to eval mode
             model.eval()
-
             with torch.no_grad():
                 custom_metrics_results = dict()
                 for i in range(len(val_data)):
                     traj = val_data[i]
-                    batch_x = traj.data_x[None]
-                    batch_u = traj.data_u[None]
+                    # Формируем ground truth из data_pose и data_x
+                    ground_truth = torch.cat([traj.data_pose, traj.data_x], dim=1)  # [N, 12]
+                    batch_x = ground_truth[None]  # [1, N, 12]
+                    batch_u = traj.data_u[None]  # [1, N, 4]
                     batch_dt = self.calculate_delta_time(traj.data_t[None])
 
                     batch_x = batch_x.to(device)
@@ -105,9 +86,9 @@ class Trainer:
 
                     predicted_traj = self.predict_multi_step(
                         model,
-                        batch_x[:, 0, :],
-                        batch_u[:, 0:-1, :],
-                        batch_dt,
+                        batch_x[:, 0, :],  # [1, 12]
+                        batch_u[:, 0:-1, :],  # [1, N-1, 4]
+                        batch_dt,  # [1, N-1, 1]
                         len(traj.data_x)
                     )
 
@@ -141,8 +122,8 @@ class Trainer:
                 wandb.log({key:history[key][-1] for key in history})
         
         print("best_main_metric = {}".format(best_main_metric))
-        model.load_state_dict(best_state_dict)       
-
+        model.load_state_dict(best_state_dict)
+        
     def evaluate(
         self,
         model,
@@ -275,26 +256,15 @@ class Trainer:
 
         return loss, custom_metrics_results
 
-    def sample_train_batch(self, data : list, batch_size: int, rollout_size:  int):
-        """
-        Selects from a random dataset, a rollout size segment.
-        Then makes a batch from all segments.
-        
-        Args:
-            :data: (list) list of RobotDatasets
-            :batch_size: (int) batch size 
-            :rollout_size: (int) rollout length (number of samples) used in predict_multi_step
-        Retrun:
-            :batch_x: (torch.tensor) Robot State batch 
-            :batch_u: (torch.tensor) control batch
-            :batch_dt: (torch.tensor) time delta batch
-        """
-        batch_x_data_size = data[0].data_x.shape[1] # int
-        batch_u_data_size = data[0].data_u.shape[1] # int
+    def sample_train_batch(self, data: list, batch_size: int, rollout_size: int):
+        batch_x_data_size = data[0].data_x.shape[1]  # 6 (скорости)
+        batch_pose_data_size = data[0].data_pose.shape[1]  # 6 (позиции)
+        batch_state_size = batch_pose_data_size + batch_x_data_size  # 12
+        batch_u_data_size = data[0].data_u.shape[1]  # 4
         batch_t_data_size = 1
 
         # [Batch size, rollout_size, robot state]
-        batch_x = torch.zeros([batch_size, rollout_size, batch_x_data_size])
+        batch_x = torch.zeros([batch_size, rollout_size, batch_state_size])
         # [Batch size, rollout_size, control]
         batch_u = torch.zeros([batch_size, rollout_size, batch_u_data_size])
         # [Batch size, rollout_size, 1]
@@ -302,16 +272,18 @@ class Trainer:
         
         for i in range(batch_size):
             # random dataset from all datasets
-            n = np.random.randint(0,len(data))                         
+            n = np.random.randint(0, len(data))                         
             # random point in dataset     
-            m = np.random.randint(0,len(data[n].data_x) - rollout_size)
+            m = np.random.randint(0, len(data[n].data_x) - rollout_size)
             # slice of data
-            batch_x[i] = data[n].data_x[m: m + rollout_size]
+            batch_pose = data[n].data_pose[m: m + rollout_size]  # [rollout_size, 6]
+            batch_state = data[n].data_x[m: m + rollout_size]  # [rollout_size, 6]
+            batch_x[i] = torch.cat([batch_pose, batch_state], dim=1)  # [rollout_size, 12]
             batch_u[i] = data[n].data_u[m: m + rollout_size]
             batch_t[i] = data[n].data_t[m: m + rollout_size]
 
         batch_dt = self.calculate_delta_time(batch_t)
-        return batch_x, batch_u, batch_dt, 
+        return batch_x, batch_u, batch_dt
 
 
     # PREDICT_MULTI_STEP

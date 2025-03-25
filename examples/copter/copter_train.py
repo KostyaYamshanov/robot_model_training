@@ -44,22 +44,17 @@ def parse_args():
     return args
 
 def parse_datasets(path):
-    """
-    Parses all dataset directories, saves each to a list
-    Args:
-        :path: (str) path to directory with data files
-    Return:
-        :list_of_datasets: (list) list of QuadcopterDatasets
-    """
     list_of_datasets = list()
     for traj_data in os.listdir(path):
         data_path = os.path.join(path, traj_data)
         if os.path.isfile(data_path) and data_path.endswith('.csv'):
-            list_of_datasets.append(
-                QuadcopterDataset(
-                    data_path=data_path
-                )
-            )
+            dataset = QuadcopterDataset(data_path=data_path)
+            print(f"Dataset {data_path}:")
+            print(f"  data_pose shape: {dataset.data_pose.shape}")  # Должно быть [N, 6]
+            print(f"  data_x shape: {dataset.data_x.shape}")  # Должно быть [N, 6]
+            print(f"  data_u shape: {dataset.data_u.shape}")  # Должно быть [N, 4]
+            print(f"  data_t shape: {dataset.data_t.shape}")  # Должно быть [N, 1]
+            list_of_datasets.append(dataset)
     return list_of_datasets
 
 def parse_all_datasets(path, exclude=[]):

@@ -59,6 +59,10 @@ class QuadcopterDataset:
         # Read the CSV file with comma as the delimiter
         data = pd.read_csv(data_path, delimiter=',')
 
+
+        print("Columns in CSV:", data.columns.tolist())  # Проверяем столбцы
+        print("Number of rows:", len(data))  # Проверяем количество строк
+
         # Extract time
         data_t = data['Time'].values.reshape(-1, 1)  # Shape: [num_samples, 1]
 

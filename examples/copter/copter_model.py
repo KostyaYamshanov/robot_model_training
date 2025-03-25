@@ -256,47 +256,70 @@ class QuadcopterModel(nn.Module):
             err_yaw = torch.mean(torch.abs(predict[:, :, 5] - ground_truth[:, :, 5]))
             err = (err_roll + err_pitch + err_yaw) / 3
         return err.cpu().detach().numpy()
-
     def plot_trajectories(self, predict, ground_truth_traj):
         """
         A helper function that takes the predicted and ground truth
         trajectory and plots them on the same graph.
         Args:
-            :predict: (torch.tensor of shape [batch size, time, state])
+            :predict: (torch.tensor or np.ndarray of shape [batch size, time, state])
                 the trajectory predicted by the neural network
             :ground_truth_traj: (QuadcopterDataset) Single trajectory dataset
         Return:
             :fig: (matplotlib.figure.Figure) Several plots on one figure
         """
-        ground_truth_pose = ground_truth_traj.data_pose.cpu().numpy()  # [x, y, z, roll, pitch, yaw]
-        ground_truth_state = ground_truth_traj.data_x.cpu().numpy()  # [V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
-        control = ground_truth_traj.data_u.cpu().numpy()  # [servo1_raw, servo2_raw, servo3_raw, servo4_raw]
-        time = ground_truth_traj.data_t.cpu().numpy()  # [time]
+        # Convert ground truth data to numpy arrays if they are tensors
+        data_pose = ground_truth_traj.data_pose
+        if torch.is_tensor(data_pose):
+            ground_truth_pose = data_pose.cpu().numpy()
+        else:
+            ground_truth_pose = data_pose
 
-        predict = predict.cpu().numpy()  # [x, y, z, roll, pitch, yaw, V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
+        data_x = ground_truth_traj.data_x
+        if torch.is_tensor(data_x):
+            ground_truth_state = data_x.cpu().numpy()
+        else:
+            ground_truth_state = data_x
 
-        fig, ax = plt.subplots(9, figsize=(7, 30))  # Adjusted for more plots
+        data_u = ground_truth_traj.data_u
+        if torch.is_tensor(data_u):
+            control = data_u.cpu().numpy()
+        else:
+            control = data_u
+
+        data_t = ground_truth_traj.data_t
+        if torch.is_tensor(data_t):
+            time = data_t.cpu().numpy()
+        else:
+            time = data_t
+
+        # Convert predict to numpy array if it is a tensor
+        if torch.is_tensor(predict):
+            predict_np = predict.cpu().numpy()
+        else:
+            predict_np = predict
+
+        fig, ax = plt.subplots(9, figsize=(7, 30))
 
         # Plot linear velocities (V_x, V_y, V_z)
         ax[0].set_ylabel('m/s')
         ax[0].set_title("Linear Velocities (V_x, V_y, V_z)")
         ax[0].plot(time[:, 0], ground_truth_state[:, 0], color='black', label='V_x', ls='--')
-        ax[0].plot(time[:, 0], predict[:, 6], color='red', label='Predict V_x')
+        ax[0].plot(time[:, 0], predict_np[:, 6], color='red', label='Predict V_x')
         ax[0].plot(time[:, 0], ground_truth_state[:, 1], color='blue', label='V_y', ls='--')
-        ax[0].plot(time[:, 0], predict[:, 7], color='orange', label='Predict V_y')
+        ax[0].plot(time[:, 0], predict_np[:, 7], color='orange', label='Predict V_y')
         ax[0].plot(time[:, 0], ground_truth_state[:, 2], color='green', label='V_z', ls='--')
-        ax[0].plot(time[:, 0], predict[:, 8], color='purple', label='Predict V_z')
+        ax[0].plot(time[:, 0], predict_np[:, 8], color='purple', label='Predict V_z')
         ax[0].legend(loc="lower right")
 
         # Plot angular velocities (rollspeed, pitchspeed, yawspeed)
         ax[1].set_ylabel('rad/s')
         ax[1].set_title("Angular Velocities (rollspeed, pitchspeed, yawspeed)")
         ax[1].plot(time[:, 0], ground_truth_state[:, 3], color='black', label='rollspeed', ls='--')
-        ax[1].plot(time[:, 0], predict[:, 9], color='red', label='Predict rollspeed')
+        ax[1].plot(time[:, 0], predict_np[:, 9], color='red', label='Predict rollspeed')
         ax[1].plot(time[:, 0], ground_truth_state[:, 4], color='blue', label='pitchspeed', ls='--')
-        ax[1].plot(time[:, 0], predict[:, 10], color='orange', label='Predict pitchspeed')
+        ax[1].plot(time[:, 0], predict_np[:, 10], color='orange', label='Predict pitchspeed')
         ax[1].plot(time[:, 0], ground_truth_state[:, 5], color='green', label='yawspeed', ls='--')
-        ax[1].plot(time[:, 0], predict[:, 11], color='purple', label='Predict yawspeed')
+        ax[1].plot(time[:, 0], predict_np[:, 11], color='purple', label='Predict yawspeed')
         ax[1].legend(loc="lower right")
 
         # Plot control inputs (servo1_raw, servo2_raw, servo3_raw, servo4_raw)
@@ -313,7 +336,7 @@ class QuadcopterModel(nn.Module):
         ax[3].set_xlabel('t, sec')
         ax[3].set_title("X Coordinate over Time")
         ax[3].plot(time[:, 0], ground_truth_pose[:, 0], color='black', label='X(t)', ls='--')
-        ax[3].plot(time[:, 0], predict[:, 0], color='red', label='Predict X(t)')
+        ax[3].plot(time[:, 0], predict_np[:, 0], color='red', label='Predict X(t)')
         ax[3].legend(loc="lower right")
 
         # Plot y coordinate over time
@@ -321,7 +344,7 @@ class QuadcopterModel(nn.Module):
         ax[4].set_xlabel('t, sec')
         ax[4].set_title("Y Coordinate over Time")
         ax[4].plot(time[:, 0], ground_truth_pose[:, 1], color='black', label='Y(t)', ls='--')
-        ax[4].plot(time[:, 0], predict[:, 1], color='red', label='Predict Y(t)')
+        ax[4].plot(time[:, 0], predict_np[:, 1], color='red', label='Predict Y(t)')
         ax[4].legend(loc="lower right")
 
         # Plot z coordinate over time
@@ -329,7 +352,7 @@ class QuadcopterModel(nn.Module):
         ax[5].set_xlabel('t, sec')
         ax[5].set_title("Z Coordinate over Time")
         ax[5].plot(time[:, 0], ground_truth_pose[:, 2], color='black', label='Z(t)', ls='--')
-        ax[5].plot(time[:, 0], predict[:, 2], color='red', label='Predict Z(t)')
+        ax[5].plot(time[:, 0], predict_np[:, 2], color='red', label='Predict Z(t)')
         ax[5].legend(loc="lower right")
 
         # Plot roll, pitch, yaw over time
@@ -337,11 +360,11 @@ class QuadcopterModel(nn.Module):
         ax[6].set_xlabel('t, sec')
         ax[6].set_title("Orientation (roll, pitch, yaw) over Time")
         ax[6].plot(time[:, 0], ground_truth_pose[:, 3], color='black', label='roll(t)', ls='--')
-        ax[6].plot(time[:, 0], predict[:, 3], color='red', label='Predict roll(t)')
+        ax[6].plot(time[:, 0], predict_np[:, 3], color='red', label='Predict roll(t)')
         ax[6].plot(time[:, 0], ground_truth_pose[:, 4], color='blue', label='pitch(t)', ls='--')
-        ax[6].plot(time[:, 0], predict[:, 4], color='orange', label='Predict pitch(t)')
+        ax[6].plot(time[:, 0], predict_np[:, 4], color='orange', label='Predict pitch(t)')
         ax[6].plot(time[:, 0], ground_truth_pose[:, 5], color='green', label='yaw(t)', ls='--')
-        ax[6].plot(time[:, 0], predict[:, 5], color='purple', label='Predict yaw(t)')
+        ax[6].plot(time[:, 0], predict_np[:, 5], color='purple', label='Predict yaw(t)')
         ax[6].legend(loc="lower right")
 
         # Plot XY trajectory
@@ -349,7 +372,7 @@ class QuadcopterModel(nn.Module):
         ax[7].set_xlabel('X, m')
         ax[7].set_title("XY Trajectory")
         ax[7].plot(ground_truth_pose[:, 0], ground_truth_pose[:, 1], color='black', label='XY', ls='--')
-        ax[7].plot(predict[:, 0], predict[:, 1], color='red', label='Predict XY')
+        ax[7].plot(predict_np[:, 0], predict_np[:, 1], color='red', label='Predict XY')
         ax[7].legend(loc="lower right")
 
         # Plot XZ trajectory
@@ -357,11 +380,117 @@ class QuadcopterModel(nn.Module):
         ax[8].set_xlabel('X, m')
         ax[8].set_title("XZ Trajectory")
         ax[8].plot(ground_truth_pose[:, 0], ground_truth_pose[:, 2], color='black', label='XZ', ls='--')
-        ax[8].plot(predict[:, 0], predict[:, 2], color='red', label='Predict XZ')
+        ax[8].plot(predict_np[:, 0], predict_np[:, 2], color='red', label='Predict XZ')
         ax[8].legend(loc="lower right")
 
         plt.tight_layout()
         return fig
+
+    # def plot_trajectories(self, predict, ground_truth_traj):
+    #     """
+    #     A helper function that takes the predicted and ground truth
+    #     trajectory and plots them on the same graph.
+    #     Args:
+    #         :predict: (torch.tensor of shape [batch size, time, state])
+    #             the trajectory predicted by the neural network
+    #         :ground_truth_traj: (QuadcopterDataset) Single trajectory dataset
+    #     Return:
+    #         :fig: (matplotlib.figure.Figure) Several plots on one figure
+    #     """
+    #     ground_truth_pose = ground_truth_traj.data_pose.cpu().numpy()  # [x, y, z, roll, pitch, yaw]
+    #     ground_truth_state = ground_truth_traj.data_x.cpu().numpy()  # [V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
+    #     control = ground_truth_traj.data_u.cpu().numpy()  # [servo1_raw, servo2_raw, servo3_raw, servo4_raw]
+    #     time = ground_truth_traj.data_t.cpu().numpy()  # [time]
+
+    #     predict = predict.cpu().numpy()  # [x, y, z, roll, pitch, yaw, V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
+
+    #     fig, ax = plt.subplots(9, figsize=(7, 30))  # Adjusted for more plots
+
+    #     # Plot linear velocities (V_x, V_y, V_z)
+    #     ax[0].set_ylabel('m/s')
+    #     ax[0].set_title("Linear Velocities (V_x, V_y, V_z)")
+    #     ax[0].plot(time[:, 0], ground_truth_state[:, 0], color='black', label='V_x', ls='--')
+    #     ax[0].plot(time[:, 0], predict[:, 6], color='red', label='Predict V_x')
+    #     ax[0].plot(time[:, 0], ground_truth_state[:, 1], color='blue', label='V_y', ls='--')
+    #     ax[0].plot(time[:, 0], predict[:, 7], color='orange', label='Predict V_y')
+    #     ax[0].plot(time[:, 0], ground_truth_state[:, 2], color='green', label='V_z', ls='--')
+    #     ax[0].plot(time[:, 0], predict[:, 8], color='purple', label='Predict V_z')
+    #     ax[0].legend(loc="lower right")
+
+    #     # Plot angular velocities (rollspeed, pitchspeed, yawspeed)
+    #     ax[1].set_ylabel('rad/s')
+    #     ax[1].set_title("Angular Velocities (rollspeed, pitchspeed, yawspeed)")
+    #     ax[1].plot(time[:, 0], ground_truth_state[:, 3], color='black', label='rollspeed', ls='--')
+    #     ax[1].plot(time[:, 0], predict[:, 9], color='red', label='Predict rollspeed')
+    #     ax[1].plot(time[:, 0], ground_truth_state[:, 4], color='blue', label='pitchspeed', ls='--')
+    #     ax[1].plot(time[:, 0], predict[:, 10], color='orange', label='Predict pitchspeed')
+    #     ax[1].plot(time[:, 0], ground_truth_state[:, 5], color='green', label='yawspeed', ls='--')
+    #     ax[1].plot(time[:, 0], predict[:, 11], color='purple', label='Predict yawspeed')
+    #     ax[1].legend(loc="lower right")
+
+    #     # Plot control inputs (servo1_raw, servo2_raw, servo3_raw, servo4_raw)
+    #     ax[2].set_ylabel('Servo Value')
+    #     ax[2].set_title("Control Inputs (Servo Values)")
+    #     ax[2].plot(time[:, 0], control[:, 0], color='black', label='servo1_raw')
+    #     ax[2].plot(time[:, 0], control[:, 1], color='blue', label='servo2_raw')
+    #     ax[2].plot(time[:, 0], control[:, 2], color='green', label='servo3_raw')
+    #     ax[2].plot(time[:, 0], control[:, 3], color='purple', label='servo4_raw')
+    #     ax[2].legend(loc="lower right")
+
+    #     # Plot x coordinate over time
+    #     ax[3].set_ylabel('m')
+    #     ax[3].set_xlabel('t, sec')
+    #     ax[3].set_title("X Coordinate over Time")
+    #     ax[3].plot(time[:, 0], ground_truth_pose[:, 0], color='black', label='X(t)', ls='--')
+    #     ax[3].plot(time[:, 0], predict[:, 0], color='red', label='Predict X(t)')
+    #     ax[3].legend(loc="lower right")
+
+    #     # Plot y coordinate over time
+    #     ax[4].set_ylabel('m')
+    #     ax[4].set_xlabel('t, sec')
+    #     ax[4].set_title("Y Coordinate over Time")
+    #     ax[4].plot(time[:, 0], ground_truth_pose[:, 1], color='black', label='Y(t)', ls='--')
+    #     ax[4].plot(time[:, 0], predict[:, 1], color='red', label='Predict Y(t)')
+    #     ax[4].legend(loc="lower right")
+
+    #     # Plot z coordinate over time
+    #     ax[5].set_ylabel('m')
+    #     ax[5].set_xlabel('t, sec')
+    #     ax[5].set_title("Z Coordinate over Time")
+    #     ax[5].plot(time[:, 0], ground_truth_pose[:, 2], color='black', label='Z(t)', ls='--')
+    #     ax[5].plot(time[:, 0], predict[:, 2], color='red', label='Predict Z(t)')
+    #     ax[5].legend(loc="lower right")
+
+    #     # Plot roll, pitch, yaw over time
+    #     ax[6].set_ylabel('rad')
+    #     ax[6].set_xlabel('t, sec')
+    #     ax[6].set_title("Orientation (roll, pitch, yaw) over Time")
+    #     ax[6].plot(time[:, 0], ground_truth_pose[:, 3], color='black', label='roll(t)', ls='--')
+    #     ax[6].plot(time[:, 0], predict[:, 3], color='red', label='Predict roll(t)')
+    #     ax[6].plot(time[:, 0], ground_truth_pose[:, 4], color='blue', label='pitch(t)', ls='--')
+    #     ax[6].plot(time[:, 0], predict[:, 4], color='orange', label='Predict pitch(t)')
+    #     ax[6].plot(time[:, 0], ground_truth_pose[:, 5], color='green', label='yaw(t)', ls='--')
+    #     ax[6].plot(time[:, 0], predict[:, 5], color='purple', label='Predict yaw(t)')
+    #     ax[6].legend(loc="lower right")
+
+    #     # Plot XY trajectory
+    #     ax[7].set_ylabel('Y, m')
+    #     ax[7].set_xlabel('X, m')
+    #     ax[7].set_title("XY Trajectory")
+    #     ax[7].plot(ground_truth_pose[:, 0], ground_truth_pose[:, 1], color='black', label='XY', ls='--')
+    #     ax[7].plot(predict[:, 0], predict[:, 1], color='red', label='Predict XY')
+    #     ax[7].legend(loc="lower right")
+
+    #     # Plot XZ trajectory
+    #     ax[8].set_ylabel('Z, m')
+    #     ax[8].set_xlabel('X, m')
+    #     ax[8].set_title("XZ Trajectory")
+    #     ax[8].plot(ground_truth_pose[:, 0], ground_truth_pose[:, 2], color='black', label='XZ', ls='--')
+    #     ax[8].plot(predict[:, 0], predict[:, 2], color='red', label='Predict XZ')
+    #     ax[8].legend(loc="lower right")
+
+    #     plt.tight_layout()
+    #     return fig
 
     def save_predict_to_csv(self, predict, ground_truth_traj, path):
         """

@@ -110,151 +110,59 @@ class QuadcopterModel(nn.Module):
         # Initial state: [x, y, z, roll, pitch, yaw, V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
         return torch.zeros([12])
 
-
-    # def update_state(self, state, control, dt=0.033, gt_velocities=None):
-    #     """
-    #     Args:
-    #         :state (torch.tensor of shape [batch, 12]):
-    #             batch of [x, y, z, roll, pitch, yaw, V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
-    #         :control (torch.tensor of shape [batch, 4]): batch of [servo1_raw, servo2_raw, servo3_raw, servo4_raw]
-    #         :dt (torch.tensor of shape [batch, 1] or float): time delta
-    #     Return:
-    #         :next_state (torch.tensor of shape [batch, 12]):
-    #             batch of [x_next, y_next, z_next, roll_next, pitch_next, yaw_next, V_x_next, V_y_next, V_z_next, rollspeed_next, pitchspeed_next, yawspeed_next]
-    #     """
-    #     if isinstance(dt, float):
-    #         dt = dt * torch.ones(state.shape[0], device=state.device)[:, None]
-
-    #     # Extract current position and orientation
-    #     x_curr, y_curr, z_curr = state[:, 0:1], state[:, 1:2], state[:, 2:3]  # shape [batch, 1]
-    #     roll_curr, pitch_curr, yaw_curr = state[:, 3:4], state[:, 4:5], state[:, 5:6]  # shape [batch, 1]
-    #     velocities_curr = state[:, 6:]  # shape [batch, 6] (V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed)
-
-    #     # print("Shape of state:", state.shape)  # Должно быть [batch, 12]
-    #     #print("Shape of velocities_curr:", velocities_curr.shape)  # Должно быть [batch, 6]
-    #     #print("Shape of control:", control.shape)  # Должно быть [batch, 4]
-    #     #print("Shape of dt:", dt.shape)  # Должно быть [batch, 1]
-
-    #     # Prepare input for the model: [state velocities, control, dt]
-    #     inp = torch.cat([velocities_curr, control, dt], dim=1)  # shape [batch, 11]
-    #     # print("Shape of inp:", inp.shape)  # Должно быть [batch, 11]
-    #     # Predict new velocities
-    #     if gt_velocities is None:
-    #         predicted_velocities = self(inp)  # shape [batch, 6]
-    #     else:
-    #         predicted_velocities = gt_velocities
-
-    #     # Extract predicted velocities
-    #     V_x, V_y, V_z = predicted_velocities[:, 0:1], predicted_velocities[:, 1:2], predicted_velocities[:, 2:3]  # shape [batch, 1]
-    #     rollspeed, pitchspeed, yawspeed = predicted_velocities[:, 3:4], predicted_velocities[:, 4:5], predicted_velocities[:, 5:6]  # shape [batch, 1]
-
-    #     # Update orientation (roll, pitch, yaw)
-    #     roll = roll_curr + rollspeed * dt  # shape [batch, 1]
-    #     pitch = pitch_curr + pitchspeed * dt  # shape [batch, 1]
-    #     yaw = yaw_curr + yawspeed * dt  # shape [batch, 1]
-
-    #     # Normalize angles to [-pi, pi]
-    #     for angle in [roll, pitch, yaw]:
-    #         mask = (angle > math.pi) * (2 * math.pi)
-    #         angle -= mask
-    #         mask = (angle < -math.pi) * (2 * math.pi)
-    #         angle += mask
-
-    #     # Update position (x, y, z) using velocities
-    #     x = x_curr + V_x * dt  # shape [batch, 1]
-    #     y = y_curr + V_y * dt  # shape [batch, 1]
-    #     z = z_curr + V_z * dt  # shape [batch, 1]
-
-    #     # Combine into next state
-    #     next_state = torch.cat([
-    #         x, y, z, roll, pitch, yaw,
-    #         predicted_velocities
-    #     ], dim=1)  # shape [batch, 12]
-
-    #     return next_state
     
-
     def update_state(self, state, control, dt=0.033, gt_velocities=None):
         """
         Args:
             :state (torch.tensor): [batch, 12] 
                 [x, y, z, roll, pitch, yaw, Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed]
             :control (torch.tensor): [batch, 4]
-                Управляющие сигналы [γ=u1, ψ=u2, θ=u3, F/m=u4]
-            :dt (float): Шаг времени
+                Control signals [γ=u1, ψ=u2, θ=u3, F/m=u4]
+            :dt (float): Time step
         """
         if isinstance(dt, float):
             dt = dt * torch.ones(state.shape[0], device=state.device)[:, None]
 
-        # Извлечение текущего состояния
+        # Extract current state
         x, y, z = state[:, 0:1], state[:, 1:2], state[:, 2:3]
         roll, pitch, yaw = state[:, 3:4], state[:, 4:5], state[:, 5:6]
         Vx, Vy, Vz = state[:, 6:7], state[:, 7:8], state[:, 8:9]
         rollspeed, pitchspeed, yawspeed = state[:, 9:10], state[:, 10:11], state[:, 11:12]
 
-        # Управляющие сигналы из модели (u1=γ, u2=ψ, u3=θ, u4=F/m)
-        gamma = control[:, 0:1]    # Угол крена (roll)
-        psi = control[:, 1:2]      # Угол тангажа (pitch)
-        theta = control[:, 2:3]    # Угол рысканья (yaw)
-        F_over_m = control[:, 3:4] # Тяга (F/m)
-
-        # Физические константы
-        g = 9.80665
-
-        ##############################################
-        # Уравнения движения из предоставленной модели
-        ##############################################
-        # Ускорения по осям (формулы 7-9)
-        ax = F_over_m * (
-            torch.sin(theta) * torch.cos(psi) * torch.cos(gamma) 
-            + torch.sin(gamma) * torch.sin(psi)
-        )
-        
-        ay = F_over_m * torch.cos(theta) * torch.cos(gamma) - g
-        
-        az = F_over_m * (
-            torch.cos(psi) * torch.sin(gamma) 
-            - torch.cos(gamma) * torch.sin(psi) * torch.sin(theta)
-        )
-
-        # Обновление линейных скоростей
-        Vx_new = Vx + ax * dt
-        Vy_new = Vy + ay * dt
-        Vz_new = Vz + az * dt
-
-        # Обновление позиции
-        x_new = x + Vx_new * dt
-        y_new = y + Vy_new * dt
-        z_new = z + Vz_new * dt
-
-        ##############################################
-        # Угловые скорости (predict из нейросети)
-        ##############################################
-        # Формирование входа для нейросети: [Vx, Vy, Vz, угл. скорости, control, dt]
+        # Form input for neural network
         inp = torch.cat([Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed, control, dt], dim=1)
-        
+
         if gt_velocities is None:
             predicted_velocities = self(inp)  # [batch, 6]
         else:
             predicted_velocities = gt_velocities
 
-        # Обновление углов через угловые скорости
-        roll_new = roll + predicted_velocities[:, 3:4] * dt
-        pitch_new = pitch + predicted_velocities[:, 4:5] * dt
-        yaw_new = yaw + predicted_velocities[:, 5:6] * dt
+        # Predicted next velocities
+        Vx_new = predicted_velocities[:, 0:1]
+        Vy_new = predicted_velocities[:, 1:2]
+        Vz_new = predicted_velocities[:, 2:3]
+        rollspeed_new = predicted_velocities[:, 3:4]
+        pitchspeed_new = predicted_velocities[:, 4:5]
+        yawspeed_new = predicted_velocities[:, 5:6]
 
-        # Нормализация углов [-π, π]
+        # Update positions and orientations using predicted velocities
+        x_new = x + Vx_new * dt
+        y_new = y + Vy_new * dt
+        z_new = z + Vz_new * dt
+        roll_new = roll + rollspeed_new * dt
+        pitch_new = pitch + pitchspeed_new * dt
+        yaw_new = yaw + yawspeed_new * dt
+
+        # Normalize angles to [-π, π]
         for angle in [roll_new, pitch_new, yaw_new]:
-            angle = torch.remainder(angle + math.pi, 2*math.pi) - math.pi
+            angle = torch.remainder(angle + math.pi, 2 * math.pi) - math.pi
 
-        # Новое состояние
+        # New state
         next_state = torch.cat([
             x_new, y_new, z_new,
             roll_new, pitch_new, yaw_new,
             Vx_new, Vy_new, Vz_new,
-            predicted_velocities[:, 3:4],  # rollspeed
-            predicted_velocities[:, 4:5],   # pitchspeed
-            predicted_velocities[:, 5:6]    # yawspeed
+            rollspeed_new, pitchspeed_new, yawspeed_new
         ], dim=1)
 
         return next_state

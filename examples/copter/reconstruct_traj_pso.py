@@ -14,159 +14,86 @@ def load_data(file_path):
     with open(file_path, "r") as f:
         content = f.read()
         data = ast.literal_eval(content)
-    
     return data
 
 class DroneState:
     def __init__(self, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, roll=0.0, pitch=0.0, yaw=0.0):
-        # Явное преобразование к float
-        self.x = float(x)
-        self.y = float(y)
-        self.z = float(z)
-        self.vx = float(vx)
-        self.vy = float(vy)
-        self.vz = float(vz)
-        self.roll = float(roll)
-        self.pitch = float(pitch)
-        self.yaw = float(yaw)
-
-    # def update_state(self, u4, g=9.80665, dt=0.05):
-    #     """Обновление состояния через уравнения динамики"""
-
-    #     # u1, u2, u3 = self.roll, self.pitch, self.yaw
-    #     # # Вычисление ускорений
-    #     # ax = u4 * (np.sin(u3) * np.cos(u2) * np.cos(u1) + np.sin(u1) * np.sin(u2))
-    #     # ay = u4 * np.cos(u3) * np.cos(u1) - g 
-    #     # az = u4 * (np.cos(u2) * np.sin(u1) - np.cos(u1) * np.sin(u2) * np.sin(u3)) 
-        
-    #     # Ускорение в глобальной системе координат
-    #     rotation = Rotation.from_euler('ZYX', [self.yaw, self.pitch, self.roll])
-    #     R = rotation.as_matrix()
-    #     ax = u4 * R[0, 2]
-    #     ay = u4 * R[1, 2] - g 
-    #     az = u4 * R[2, 2]
-
-    #     # Интегрирование
-    #     self.vx += ax * dt
-    #     self.vy += ay * dt
-    #     self.vz += az * dt
-    #     self.x += self.vx * dt
-    #     self.y += self.vy * dt
-    #     self.z += self.vz * dt
+        # Инициализация состояния дрона
+        self.x, self.y, self.z = map(float, (x, y, z))
+        self.vx, self.vy, self.vz = map(float, (vx, vy, vz))
+        self.roll, self.pitch, self.yaw = map(float, (roll, pitch, yaw))
 
     def euler_to_rotation_matrix(self, roll, pitch, yaw):
-        """Создание матрицы поворота из углов Эйлера (ZYX порядок), как в симуляторе"""
-        cr = np.cos(roll)
-        sr = np.sin(roll)
-        cp = np.cos(pitch)
-        sp = np.sin(pitch)
-        cy = np.cos(yaw)
-        sy = np.sin(yaw)
-        
-        R = np.array([
+        """Матрица поворота из Эйлера (ZYX)"""
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        return np.array([
             [cy*cp,  cy*sp*sr - sy*cr,  cy*sp*cr + sy*sr],
             [sy*cp,  sy*sp*sr + cy*cr,  sy*sp*cr - cy*sr],
             [-sp,            cp*sr,            cp*cr]
         ])
-        return R
 
     def update_state(self, u4, roll_sp, pitch_sp, yaw_rate, g=9.81, dt=0.02, mass=0.5, max_thrust=17.0, max_angle=np.radians(30)):
-        """Обновление состояния на основе динамики симулятора"""
-        # Ограничение управления
-        # thrust = np.clip(u4, 0.0, 1.0) * max_thrust
-        thrust_normalized = (u4 + 1) / 2
-        thrust = np.clip(thrust_normalized, 0.0, 1.0) * max_thrust
+        """Обновление состояния: thrust u4 в [0,1]"""
+        # Прямое масштабирование топлива
+        thrust = np.clip(u4, -1.0, 1.0) * max_thrust
+        thrust = (u4+1)/2 * max_thrust  # Ньютонов
         roll_sp = np.clip(roll_sp, -max_angle, max_angle)
         pitch_sp = np.clip(pitch_sp, -max_angle, max_angle)
 
-        # Смешивание заданных углов (как в симуляторе)
-        # roll = roll_sp  # Можно добавить веса, как в симуляторе: 0.7 * roll_sp + 0.3 * self.roll
-        # pitch = pitch_sp
-
+        # Обновление углов
         yaw = self.yaw + yaw_rate * dt
         roll = 0.7 * roll_sp + 0.3 * self.roll
         pitch = 0.7 * pitch_sp + 0.3 * self.pitch
-        # Матрица поворота
         R = self.euler_to_rotation_matrix(roll, pitch, yaw)
 
-        # Уравнения движения
-        thrust_global = R @ np.array([0.0, 0.0, thrust])
-        self.acceleration = (thrust_global - np.array([0.0, 0.0, mass * g])) / mass
-        
+        # Силы и ускорение
+        #  TEST 
+        thrust_global = R @ np.array([0.0, 0.0, thrust / mass - g])
+        # thrust_global = R @ np.array([0.0, 0.0, thrust ])
+        gravity = np.array([0.0, 0.0, mass * g])
+        # self.acceleration = (thrust_global - gravity) / mass
+        self.acceleration = R @ np.array([0, 0, thrust / mass - g])
+
         # Интегрирование
         self.vx += self.acceleration[0] * dt
         self.vy += self.acceleration[1] * dt
         self.vz += self.acceleration[2] * dt
         self.x += self.vx * dt
         self.y += self.vy * dt
-        self.z += self.vz * dt
+        self.z = max(0.0, self.z + self.vz * dt)
 
-        # Ограничение высоты
-        if self.z < 0.0:
-            self.z = 0.0
+        self.roll, self.pitch, self.yaw = roll, pitch, yaw
 
-        # Обновление углов
-        self.roll = roll
-        self.pitch = pitch
-        self.yaw = yaw
 
-def objective_function(params, data):
-    mass, max_thrust = params
-    rmse, _, _, _, _ = reconstruct_trajectory(data, mass, max_thrust)
-    return rmse
-
-def reconstruct_trajectory(data, mass, max_thrust):
-    """Восстановление траектории с заданными mass и max_thrust"""
-    required_keys = ['roll', 'pitch', 'yaw', 'u4']
-    for key in required_keys:
-        if key not in data:
-            raise KeyError(f"Недостает данных: {key}")
-    
-    
-    state = DroneState(
-        x=0.0, y=0.0, z=0.0,
-        roll=data['roll'][0],
-        pitch=data['pitch'][0],
-        yaw=data['yaw'][0]
-    )
-    
-    n = len(data['u4']) - 1
+def reconstruct_trajectory(data, mass, max_thrust, dt=0.05):
+    """Восстановление траектории по mass и max_thrust"""
+    for key in ('roll','pitch','yaw','u4'):
+        if key not in data: raise KeyError(f"Missing '{key}' in data")
+    state = DroneState(roll=data['roll'][0], pitch=data['pitch'][0], yaw=data['yaw'][0])
+    n = len(data['u4'])-1
     x = np.zeros(n)
     y = np.zeros(n)
     z = np.zeros(n)
-    dt = 0.05  # Фиксированный шаг из вашего кода
-    
     for i in range(n):
-        x[i] = state.x
-        y[i] = state.y
-        z[i] = state.z
-        
-        state.update_state(
-            data['u4'][i],
-            data['roll'][i],
-            data['pitch'][i],
-            data['yaw'][i],  # Используем yaw как yaw_rate для простоты
-            dt=dt,
-            mass=mass,
-            max_thrust=max_thrust
-        )
-    
-    # Вычисляем RMSE, если есть реальные данные
-    if all(k in data for k in ['x', 'y', 'z']):
-        min_len = min(len(data['x']), len(data['y']), len(data['z']), n)
-        gt_x = np.array(data['x'][:min_len])
-        gt_y = np.array(data['y'][:min_len])
-        gt_z = np.array(data['z'][:min_len])
-        rec_x = x[:min_len]
-        rec_y = y[:min_len]
-        rec_z = z[:min_len]
-        rmse = np.sqrt(mean_squared_error(
-            np.vstack([gt_x, gt_y, gt_z]).T,
-            np.vstack([rec_x, rec_y, rec_z]).T
-        ))
-        return rmse, dt * np.arange(n), x, y, z  # Возвращаем RMSE и траекторию
+        x[i], y[i], z[i] = state.x, state.y, state.z
+        # предполагаем data['yaw'] как угловую скорость
+        state.update_state(data['u4'][i], data['roll'][i], data['pitch'][i], data['yaw'][i], dt=dt, mass=mass, max_thrust=max_thrust)
+
+    if all(k in data for k in ('x','y','z')):
+        gt = np.vstack([data['x'], data['y'], data['z']]).T
+        rec = np.vstack([x, y, z]).T
+        rmse = np.sqrt(mean_squared_error(gt, rec))
+        return rmse, np.arange(n)*dt, x, y, z
     else:
-        raise ValueError("Реальные данные о положении (x, y, z) отсутствуют")
+        raise ValueError("Ground-truth positions missing.")
+
+
+def objective_function(params, data):
+    mass, max_thrust = params
+    rmse, *_ = reconstruct_trajectory(data, mass, max_thrust)
+    return rmse
 
 
 def plot_comparison(t, x, y, z, data):
@@ -176,10 +103,7 @@ def plot_comparison(t, x, y, z, data):
     
     # 3D траектория
     ax3d = fig.add_subplot(gs[0], projection='3d')
-    
-    # Проверка наличия GT данных и обрезка до одинаковой длины
     has_gt = all(k in data for k in ['x', 'y', 'z'])
-    gt_x, gt_y, gt_z = [], [], []
     if has_gt:
         min_len = min(len(data['x']), len(data['y']), len(data['z']), len(x), len(y), len(z))
         gt_x = np.array(data['x'][:min_len])
@@ -189,11 +113,8 @@ def plot_comparison(t, x, y, z, data):
         x = x[:min_len]
         y = y[:min_len]
         z = z[:min_len]
-        # Расчёт RMSE для 3D
-        rmse_3d = np.sqrt(mean_squared_error(np.vstack([gt_x, gt_y, gt_z]).T, 
-                                           np.vstack([x, y, z]).T))
+        rmse_3d = np.sqrt(mean_squared_error(np.vstack([gt_x, gt_y, gt_z]).T, np.vstack([x, y, z]).T))
     
-    # Построение 3D траектории
     ax3d.plot(x, y, z, label='Восстановленная', linewidth=2)
     if has_gt:
         ax3d.plot(gt_x, gt_y, gt_z, linestyle='--', alpha=0.7, label='GT')
@@ -202,7 +123,7 @@ def plot_comparison(t, x, y, z, data):
     ax3d.set_xlabel('X')
     ax3d.set_ylabel('Y')
     ax3d.set_zlabel('Z')
-    
+
     # Графики по осям X, Y, Z
     gs_low = gridspec.GridSpecFromSubplotSpec(1, 3, subplot_spec=gs[1])
     ax_x = fig.add_subplot(gs_low[0])
@@ -243,39 +164,15 @@ def plot_comparison(t, x, y, z, data):
     plt.show()
 
 
-# После загрузки данных в if __name__ == "__main__":
-if __name__ == "__main__":
-    # Загрузка данных
-    data = load_data("drone_state.txt")
-    print(f"data.keys = {data.keys()}")
-    control_data = load_data("control.txt")
-    print(f"control_data.keys = {control_data.keys()}")
-    
-    # Нормализация throttle (как в вашем коде)
-    control_data['throttle'] = [(-1.0 * t + 1) / 2 for t in control_data['throttle']]
-    MASS_K = 20  # Из вашего кода
-    data['u4'] = [t / MASS_K for t in control_data['throttle']]
-    
-    # Границы для параметров
-    lb = [0.5, 5.0]  # Нижние границы: mass (кг), max_thrust (Н)
-    ub = [1.5, 20.0] # Верхние границы: mass (кг), max_thrust (Н)
-    
-    # Запуск PSO
-    optimal_params, min_rmse = pso(
-        objective_function,
-        lb,
-        ub,
-        args=(data,),
-        swarmsize=100,  # Количество частиц
-        maxiter=1000     # Максимальное число итераций
-    )
-    
-    mass_opt, max_thrust_opt = optimal_params
-    print(f"Оптимальные параметры: mass={mass_opt:.2f} кг, max_thrust={max_thrust_opt:.2f} Н")
-    print(f"Минимальный RMSE: {min_rmse:.2f} м")
-    
-    # Восстановление траектории с оптимальными параметрами
-    _, t, x, y, z = reconstruct_trajectory(data, mass_opt, max_thrust_opt)
-    
-    # Визуализация
+if __name__ == '__main__':
+    data = load_data('drone_state.txt')
+    ctrl = load_data('control.txt')
+    ctrl['throttle'] = [(1 - t)/2 for t in ctrl['throttle']]
+    MASS_K = 1
+    data['u4'] = [t/MASS_K for t in ctrl['throttle']]
+
+    lb, ub = [0.1,5.0], [2.0,20.0]
+    opt, rmse = pso(objective_function, lb, ub, args=(data,), swarmsize=100, maxiter=100)
+    print(f"mass={opt[0]:.2f}, thrust={opt[1]:.2f}, RMSE={rmse:.2f}")
+    _, t, x, y, z = reconstruct_trajectory(data, *opt)
     plot_comparison(t, x, y, z, data)

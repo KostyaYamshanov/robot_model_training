@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 import torch
 import numpy as np
 
-from copter_model import QuadcopterModel  # Заменяем RosbotModel на QuadcopterModel
-from copter_dataset import QuadcopterDataset  # Заменяем RosbotDataset на QuadcopterDataset
+from copter_model import QuadcopterModel 
+from copter_dataset import QuadcopterDataset 
 from robot_nn.trainer import Trainer
 from robot_nn.utils import parse_config, init_wandb
 

@@ -8,6 +8,29 @@ import matplotlib.pyplot as plt
 from robot_nn.defualt_nn_model import DefaultModel
 import numpy as np
 
+def euler_to_rotmat(roll, pitch, yaw):
+    """
+    Создает матрицу поворота из углов Эйлера (roll, pitch, yaw)
+    """
+    cr = torch.cos(roll)
+    sr = torch.sin(roll)
+    cp = torch.cos(pitch)
+    sp = torch.sin(pitch)
+    cy = torch.cos(yaw)
+    sy = torch.sin(yaw)
+
+    # 3x3 rotation matrix
+    R = torch.zeros(roll.shape[0], 3, 3, device=roll.device)
+    R[:, 0, 0] = cp * cy
+    R[:, 0, 1] = cy * sp * sr - sy * cr
+    R[:, 0, 2] = cy * sp * cr + sy * sr
+    R[:, 1, 0] = cp * sy
+    R[:, 1, 1] = sy * sp * sr + cy * cr
+    R[:, 1, 2] = sy * sp * cr - cy * sr
+    R[:, 2, 0] = -sp
+    R[:, 2, 1] = cp * sr
+    R[:, 2, 2] = cp * cr
+    return R
 
 class QuadcopterModelLoss(nn.Module):
     def __init__(self):
@@ -110,34 +133,29 @@ class QuadcopterModel(nn.Module):
         # Initial state: [x, y, z, roll, pitch, yaw, V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
         return torch.zeros([12])
 
-    
-    def update_state(self, state, control, dt=0.033, gt_velocities=None):
+
+    def update_state(self, state, control, dt=0.033, gt_velocities=None, vel_in_body_frame=False):
         """
-        Args:
-            :state (torch.tensor): [batch, 12] 
-                [x, y, z, roll, pitch, yaw, Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed]
-            :control (torch.tensor): [batch, 4]
-                Control signals [γ=u1, ψ=u2, θ=u3, F/m=u4]
-            :dt (float): Time step
+        state: [batch, 12] (x, y, z, roll, pitch, yaw, Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed)
+        control: [batch, 4]
+        dt: float
+        gt_velocities: если не None, использовать их вместо предсказания сети
+        vel_in_body_frame: True, если скорости заданы в body frame
         """
         if isinstance(dt, float):
             dt = dt * torch.ones(state.shape[0], device=state.device)[:, None]
 
-        # Extract current state
         x, y, z = state[:, 0:1], state[:, 1:2], state[:, 2:3]
         roll, pitch, yaw = state[:, 3:4], state[:, 4:5], state[:, 5:6]
         Vx, Vy, Vz = state[:, 6:7], state[:, 7:8], state[:, 8:9]
         rollspeed, pitchspeed, yawspeed = state[:, 9:10], state[:, 10:11], state[:, 11:12]
 
-        # Form input for neural network
         inp = torch.cat([Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed, control, dt], dim=1)
-
         if gt_velocities is None:
-            predicted_velocities = self(inp)  # [batch, 6]
+            predicted_velocities = self(inp)
         else:
             predicted_velocities = gt_velocities
 
-        # Predicted next velocities
         Vx_new = predicted_velocities[:, 0:1]
         Vy_new = predicted_velocities[:, 1:2]
         Vz_new = predicted_velocities[:, 2:3]
@@ -145,27 +163,94 @@ class QuadcopterModel(nn.Module):
         pitchspeed_new = predicted_velocities[:, 4:5]
         yawspeed_new = predicted_velocities[:, 5:6]
 
-        # Update positions and orientations using predicted velocities
-        x_new = x + Vx_new * dt
-        y_new = y + Vy_new * dt
-        z_new = z + Vz_new * dt
+        # --- Ключевой блок: преобразование скоростей ---
+        if vel_in_body_frame:
+            # Преобразуем скорости из body frame в world frame
+            R = euler_to_rotmat(roll, pitch, yaw)  # [batch, 3, 3]
+            V_body = torch.cat([Vx_new, Vy_new, Vz_new], dim=1).unsqueeze(2)  # [batch, 3, 1]
+            V_world = torch.bmm(R, V_body).squeeze(2)  # [batch, 3]
+            x_new = x + V_world[:, 0:1] * dt
+            y_new = y + V_world[:, 1:2] * dt
+            z_new = z + V_world[:, 2:3] * dt
+        else:
+            # Если скорости уже в world frame
+            x_new = x + Vx_new * dt
+            y_new = y + Vy_new * dt
+            z_new = z + Vz_new * dt
+
         roll_new = roll + rollspeed_new * dt
         pitch_new = pitch + pitchspeed_new * dt
         yaw_new = yaw + yawspeed_new * dt
 
-        # Normalize angles to [-π, π]
-        for angle in [roll_new, pitch_new, yaw_new]:
-            angle = torch.remainder(angle + math.pi, 2 * math.pi) - math.pi
+        # --- Исправь нормализацию углов ---
+        roll_new = torch.remainder(roll_new + math.pi, 2 * math.pi) - math.pi
+        pitch_new = torch.remainder(pitch_new + math.pi, 2 * math.pi) - math.pi
+        yaw_new = torch.remainder(yaw_new + math.pi, 2 * math.pi) - math.pi
 
-        # New state
         next_state = torch.cat([
             x_new, y_new, z_new,
             roll_new, pitch_new, yaw_new,
             Vx_new, Vy_new, Vz_new,
             rollspeed_new, pitchspeed_new, yawspeed_new
         ], dim=1)
-
         return next_state
+
+    
+    # def update_state(self, state, control, dt=0.033, gt_velocities=None):
+    #     """
+    #     Args:
+    #         :state (torch.tensor): [batch, 12] 
+    #             [x, y, z, roll, pitch, yaw, Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed]
+    #         :control (torch.tensor): [batch, 4]
+    #             Control signals [γ=u1, ψ=u2, θ=u3, F/m=u4]
+    #         :dt (float): Time step
+    #     """
+    #     if isinstance(dt, float):
+    #         dt = dt * torch.ones(state.shape[0], device=state.device)[:, None]
+
+    #     # Extract current state
+    #     x, y, z = state[:, 0:1], state[:, 1:2], state[:, 2:3]
+    #     roll, pitch, yaw = state[:, 3:4], state[:, 4:5], state[:, 5:6]
+    #     Vx, Vy, Vz = state[:, 6:7], state[:, 7:8], state[:, 8:9]
+    #     rollspeed, pitchspeed, yawspeed = state[:, 9:10], state[:, 10:11], state[:, 11:12]
+
+    #     # Form input for neural network
+    #     inp = torch.cat([Vx, Vy, Vz, rollspeed, pitchspeed, yawspeed, control, dt], dim=1)
+
+    #     if gt_velocities is None:
+    #         predicted_velocities = self(inp)  # [batch, 6]
+    #     else:
+    #         predicted_velocities = gt_velocities
+
+    #     # Predicted next velocities
+    #     Vx_new = predicted_velocities[:, 0:1]
+    #     Vy_new = predicted_velocities[:, 1:2]
+    #     Vz_new = predicted_velocities[:, 2:3]
+    #     rollspeed_new = predicted_velocities[:, 3:4]
+    #     pitchspeed_new = predicted_velocities[:, 4:5]
+    #     yawspeed_new = predicted_velocities[:, 5:6]
+
+    #     # Update positions and orientations using predicted velocities
+    #     x_new = x + Vx_new * dt
+    #     y_new = y + Vy_new * dt
+    #     z_new = z + Vz_new * dt
+    #     roll_new = roll + rollspeed_new * dt
+    #     pitch_new = pitch + pitchspeed_new * dt
+    #     yaw_new = yaw + yawspeed_new * dt
+
+    #     # Normalize angles to [-π, π]
+    #     for angle in [roll_new, pitch_new, yaw_new]:
+    #         angle = torch.remainder(angle + math.pi, 2 * math.pi) - math.pi
+
+    #     # New state
+    #     next_state = torch.cat([
+    #         x_new, y_new, z_new,
+    #         roll_new, pitch_new, yaw_new,
+    #         Vx_new, Vy_new, Vz_new,
+    #         rollspeed_new, pitchspeed_new, yawspeed_new
+    #     ], dim=1)
+
+    #     return next_state
 
     def forward(self, inp):
         """
@@ -246,11 +331,13 @@ class QuadcopterModel(nn.Module):
             :err: (torch.tensor of shape [batch size, 1]) calculated error
         """
         with torch.no_grad():
-            err_roll = torch.mean(torch.abs(predict[:, :, 3] - ground_truth[:, :, 3]))
-            err_pitch = torch.mean(torch.abs(predict[:, :, 4] - ground_truth[:, :, 4]))
-            err_yaw = torch.mean(torch.abs(predict[:, :, 5] - ground_truth[:, :, 5]))
+            err_roll = torch.mean(torch.abs(torch.atan2(torch.sin(predict[:, :, 3] - ground_truth[:, :, 3]), torch.cos(predict[:, :, 3] - ground_truth[:, :, 3]))))
+            err_pitch = torch.mean(torch.abs(torch.atan2(torch.sin(predict[:, :, 4] - ground_truth[:, :, 4]), torch.cos(predict[:, :, 4] - ground_truth[:, :, 4]))))
+            err_yaw = torch.mean(torch.abs(torch.atan2(torch.sin(predict[:, :, 5] - ground_truth[:, :, 5]), torch.cos(predict[:, :, 5] - ground_truth[:, :, 5]))))
             err = (err_roll + err_pitch + err_yaw) / 3
         return err.cpu().detach().numpy()
+    
+    
     def plot_trajectories(self, predict, ground_truth_traj):
         """
         A helper function that takes the predicted and ground truth
@@ -380,112 +467,6 @@ class QuadcopterModel(nn.Module):
 
         plt.tight_layout()
         return fig
-
-    # def plot_trajectories(self, predict, ground_truth_traj):
-    #     """
-    #     A helper function that takes the predicted and ground truth
-    #     trajectory and plots them on the same graph.
-    #     Args:
-    #         :predict: (torch.tensor of shape [batch size, time, state])
-    #             the trajectory predicted by the neural network
-    #         :ground_truth_traj: (QuadcopterDataset) Single trajectory dataset
-    #     Return:
-    #         :fig: (matplotlib.figure.Figure) Several plots on one figure
-    #     """
-    #     ground_truth_pose = ground_truth_traj.data_pose.cpu().numpy()  # [x, y, z, roll, pitch, yaw]
-    #     ground_truth_state = ground_truth_traj.data_x.cpu().numpy()  # [V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
-    #     control = ground_truth_traj.data_u.cpu().numpy()  # [servo1_raw, servo2_raw, servo3_raw, servo4_raw]
-    #     time = ground_truth_traj.data_t.cpu().numpy()  # [time]
-
-    #     predict = predict.cpu().numpy()  # [x, y, z, roll, pitch, yaw, V_x, V_y, V_z, rollspeed, pitchspeed, yawspeed]
-
-    #     fig, ax = plt.subplots(9, figsize=(7, 30))  # Adjusted for more plots
-
-    #     # Plot linear velocities (V_x, V_y, V_z)
-    #     ax[0].set_ylabel('m/s')
-    #     ax[0].set_title("Linear Velocities (V_x, V_y, V_z)")
-    #     ax[0].plot(time[:, 0], ground_truth_state[:, 0], color='black', label='V_x', ls='--')
-    #     ax[0].plot(time[:, 0], predict[:, 6], color='red', label='Predict V_x')
-    #     ax[0].plot(time[:, 0], ground_truth_state[:, 1], color='blue', label='V_y', ls='--')
-    #     ax[0].plot(time[:, 0], predict[:, 7], color='orange', label='Predict V_y')
-    #     ax[0].plot(time[:, 0], ground_truth_state[:, 2], color='green', label='V_z', ls='--')
-    #     ax[0].plot(time[:, 0], predict[:, 8], color='purple', label='Predict V_z')
-    #     ax[0].legend(loc="lower right")
-
-    #     # Plot angular velocities (rollspeed, pitchspeed, yawspeed)
-    #     ax[1].set_ylabel('rad/s')
-    #     ax[1].set_title("Angular Velocities (rollspeed, pitchspeed, yawspeed)")
-    #     ax[1].plot(time[:, 0], ground_truth_state[:, 3], color='black', label='rollspeed', ls='--')
-    #     ax[1].plot(time[:, 0], predict[:, 9], color='red', label='Predict rollspeed')
-    #     ax[1].plot(time[:, 0], ground_truth_state[:, 4], color='blue', label='pitchspeed', ls='--')
-    #     ax[1].plot(time[:, 0], predict[:, 10], color='orange', label='Predict pitchspeed')
-    #     ax[1].plot(time[:, 0], ground_truth_state[:, 5], color='green', label='yawspeed', ls='--')
-    #     ax[1].plot(time[:, 0], predict[:, 11], color='purple', label='Predict yawspeed')
-    #     ax[1].legend(loc="lower right")
-
-    #     # Plot control inputs (servo1_raw, servo2_raw, servo3_raw, servo4_raw)
-    #     ax[2].set_ylabel('Servo Value')
-    #     ax[2].set_title("Control Inputs (Servo Values)")
-    #     ax[2].plot(time[:, 0], control[:, 0], color='black', label='servo1_raw')
-    #     ax[2].plot(time[:, 0], control[:, 1], color='blue', label='servo2_raw')
-    #     ax[2].plot(time[:, 0], control[:, 2], color='green', label='servo3_raw')
-    #     ax[2].plot(time[:, 0], control[:, 3], color='purple', label='servo4_raw')
-    #     ax[2].legend(loc="lower right")
-
-    #     # Plot x coordinate over time
-    #     ax[3].set_ylabel('m')
-    #     ax[3].set_xlabel('t, sec')
-    #     ax[3].set_title("X Coordinate over Time")
-    #     ax[3].plot(time[:, 0], ground_truth_pose[:, 0], color='black', label='X(t)', ls='--')
-    #     ax[3].plot(time[:, 0], predict[:, 0], color='red', label='Predict X(t)')
-    #     ax[3].legend(loc="lower right")
-
-    #     # Plot y coordinate over time
-    #     ax[4].set_ylabel('m')
-    #     ax[4].set_xlabel('t, sec')
-    #     ax[4].set_title("Y Coordinate over Time")
-    #     ax[4].plot(time[:, 0], ground_truth_pose[:, 1], color='black', label='Y(t)', ls='--')
-    #     ax[4].plot(time[:, 0], predict[:, 1], color='red', label='Predict Y(t)')
-    #     ax[4].legend(loc="lower right")
-
-    #     # Plot z coordinate over time
-    #     ax[5].set_ylabel('m')
-    #     ax[5].set_xlabel('t, sec')
-    #     ax[5].set_title("Z Coordinate over Time")
-    #     ax[5].plot(time[:, 0], ground_truth_pose[:, 2], color='black', label='Z(t)', ls='--')
-    #     ax[5].plot(time[:, 0], predict[:, 2], color='red', label='Predict Z(t)')
-    #     ax[5].legend(loc="lower right")
-
-    #     # Plot roll, pitch, yaw over time
-    #     ax[6].set_ylabel('rad')
-    #     ax[6].set_xlabel('t, sec')
-    #     ax[6].set_title("Orientation (roll, pitch, yaw) over Time")
-    #     ax[6].plot(time[:, 0], ground_truth_pose[:, 3], color='black', label='roll(t)', ls='--')
-    #     ax[6].plot(time[:, 0], predict[:, 3], color='red', label='Predict roll(t)')
-    #     ax[6].plot(time[:, 0], ground_truth_pose[:, 4], color='blue', label='pitch(t)', ls='--')
-    #     ax[6].plot(time[:, 0], predict[:, 4], color='orange', label='Predict pitch(t)')
-    #     ax[6].plot(time[:, 0], ground_truth_pose[:, 5], color='green', label='yaw(t)', ls='--')
-    #     ax[6].plot(time[:, 0], predict[:, 5], color='purple', label='Predict yaw(t)')
-    #     ax[6].legend(loc="lower right")
-
-    #     # Plot XY trajectory
-    #     ax[7].set_ylabel('Y, m')
-    #     ax[7].set_xlabel('X, m')
-    #     ax[7].set_title("XY Trajectory")
-    #     ax[7].plot(ground_truth_pose[:, 0], ground_truth_pose[:, 1], color='black', label='XY', ls='--')
-    #     ax[7].plot(predict[:, 0], predict[:, 1], color='red', label='Predict XY')
-    #     ax[7].legend(loc="lower right")
-
-    #     # Plot XZ trajectory
-    #     ax[8].set_ylabel('Z, m')
-    #     ax[8].set_xlabel('X, m')
-    #     ax[8].set_title("XZ Trajectory")
-    #     ax[8].plot(ground_truth_pose[:, 0], ground_truth_pose[:, 2], color='black', label='XZ', ls='--')
-    #     ax[8].plot(predict[:, 0], predict[:, 2], color='red', label='Predict XZ')
-    #     ax[8].legend(loc="lower right")
-
-    #     plt.tight_layout()
-    #     return fig
 
     def save_predict_to_csv(self, predict, ground_truth_traj, path):
         """
